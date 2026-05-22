@@ -1,0 +1,278 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider          = "postgresql"
+  url               = env("DATABASE_URL")
+  directUrl         = env("DIRECT_URL")
+}
+
+model User {
+  id            String           @id @default(uuid())
+  name          String?
+  email         String           @unique
+  password      String?
+  role          String?
+  createdAt     DateTime         @default(now()) @map("created_at")
+  clients       Client[]
+  conversations AiConversation[]
+  interactions  ClientInteraction[]
+  notes         AdvisorNote[]
+  watchlist     Watchlist[]
+
+  @@map("users")
+}
+
+model Client {
+  id                 String              @id @default(uuid())
+  advisorId          String?             @map("advisor_id")
+  firstName          String?             @map("first_name")
+  lastName           String?             @map("last_name")
+  email              String?
+  phone              String?
+  riskProfile        String?             @map("risk_profile")
+  annualIncome       Float?              @map("annual_income")
+  netWorth           Float?              @map("net_worth")
+  investmentGoal     String?             @map("investment_goal")
+  age                Int?
+  occupation         String?
+  city               String?
+  country            String?             @default("US")
+  onboardingDate     DateTime?           @map("onboarding_date") @db.Date
+  lastReviewDate     DateTime?           @map("last_review_date") @db.Date
+  relationshipStatus String?             @map("relationship_status")
+  dependents         Int?                @default(0)
+  riskScore          Float?              @map("risk_score")
+  kycStatus          String?             @map("kyc_status") @default("verified")
+  createdAt          DateTime?           @default(now()) @map("created_at")
+  advisor            User?               @relation(fields: [advisorId], references: [id])
+  portfolios         Portfolio[]
+  recommendations    Recommendation[]
+  complianceAlerts   ComplianceAlert[]
+  interactions       ClientInteraction[]
+  notes              AdvisorNote[]
+  riskAssessments    RiskAssessment[]
+
+  @@map("clients")
+}
+
+model Portfolio {
+  id               String              @id @default(uuid())
+  clientId         String?             @map("client_id")
+  portfolioName    String?             @map("portfolio_name")
+  totalValue       Float?              @map("total_value")
+  riskScore        Float?              @map("risk_score")
+  performanceScore Float?              @map("performance_score")
+  benchmark        String?             @default("S&P 500")
+  inceptionDate    DateTime?           @map("inception_date") @db.Date
+  lastRebalanced   DateTime?           @map("last_rebalanced") @db.Date
+  targetReturn     Float?              @map("target_return")
+  currency         String?             @default("USD")
+  portfolioType    String?             @map("portfolio_type")
+  status           String?             @default("active")
+  createdAt        DateTime?           @default(now()) @map("created_at")
+  client           Client?             @relation(fields: [clientId], references: [id])
+  holdings         Holding[]
+  transactions     Transaction[]
+  snapshots        PortfolioSnapshot[]
+
+  @@map("portfolios")
+}
+
+model Holding {
+  id                   String     @id @default(uuid())
+  portfolioId          String?    @map("portfolio_id")
+  symbol               String?
+  assetType            String?    @map("asset_type")
+  quantity             Float?
+  purchasePrice        Float?     @map("purchase_price")
+  currentPrice         Float?     @map("current_price")
+  allocationPercentage Float?     @map("allocation_percentage")
+  sector               String?
+  country              String?    @default("US")
+  marketCapCategory    String?    @map("market_cap_category")
+  dividendYield        Float?     @map("dividend_yield")
+  beta                 Float?
+  lastUpdated          DateTime?  @default(now()) @map("last_updated")
+  portfolio            Portfolio? @relation(fields: [portfolioId], references: [id])
+
+  @@map("holdings")
+}
+
+model Transaction {
+  id              String     @id @default(uuid())
+  portfolioId     String?    @map("portfolio_id")
+  transactionType String?    @map("transaction_type")
+  symbol          String?
+  quantity        Float?
+  price           Float?
+  tradeDate       DateTime?  @map("trade_date")
+  status          String?
+  fees            Float?     @default(0)
+  notes           String?
+  initiatedBy     String?    @map("initiated_by") @default("advisor")
+  settlementDate  DateTime?  @map("settlement_date") @db.Date
+  portfolio       Portfolio? @relation(fields: [portfolioId], references: [id])
+
+  @@map("transactions")
+}
+
+model AiConversation {
+  id             String      @id @default(uuid())
+  userId         String?     @map("user_id")
+  title          String?
+  contextSummary String?     @map("context_summary")
+  createdAt      DateTime?   @default(now()) @map("created_at")
+  user           User?       @relation(fields: [userId], references: [id])
+  messages       AiMessage[]
+
+  @@map("ai_conversations")
+}
+
+model AiMessage {
+  id             String          @id @default(uuid())
+  conversationId String?         @map("conversation_id")
+  sender         String?
+  message        String?
+  createdAt      DateTime?       @default(now()) @map("created_at")
+  conversation   AiConversation? @relation(fields: [conversationId], references: [id])
+
+  @@map("ai_messages")
+}
+
+model Recommendation {
+  id                 String    @id @default(uuid())
+  clientId           String?   @map("client_id")
+  recommendationType String?   @map("recommendation_type")
+  recommendationText String?   @map("recommendation_text")
+  confidenceScore    Float?    @map("confidence_score")
+  reasoning          String?
+  createdAt          DateTime? @default(now()) @map("created_at")
+  client             Client?   @relation(fields: [clientId], references: [id])
+
+  @@map("recommendations")
+}
+
+model ComplianceAlert {
+  id           String    @id @default(uuid())
+  clientId     String?   @map("client_id")
+  severity     String?
+  alertMessage String?   @map("alert_message")
+  status       String?
+  resolvedAt   DateTime? @map("resolved_at")
+  resolvedBy   String?   @map("resolved_by")
+  notes        String?
+  alertType    String?   @map("alert_type")
+  createdAt    DateTime? @default(now()) @map("created_at")
+  client       Client?   @relation(fields: [clientId], references: [id])
+
+  @@map("compliance_alerts")
+}
+
+model MarketData {
+  id           String    @id @default(uuid())
+  symbol       String?
+  currentPrice Float?    @map("current_price")
+  dailyChange  Float?    @map("daily_change")
+  volume       Float?
+  week52High   Float?    @map("week_52_high")
+  week52Low    Float?    @map("week_52_low")
+  peRatio      Float?    @map("pe_ratio")
+  marketCap    Float?    @map("market_cap")
+  sector       String?
+  assetType    String?   @map("asset_type")
+  updatedAt    DateTime? @default(now()) @map("updated_at")
+
+  @@map("market_data")
+}
+
+model ResearchReport {
+  id         String    @id @default(uuid())
+  title      String?
+  content    String?
+  category   String?
+  uploadedAt DateTime? @default(now()) @map("uploaded_at")
+
+  @@map("research_reports")
+}
+
+model PortfolioSnapshot {
+  id               String    @id @default(uuid())
+  portfolioId      String?   @map("portfolio_id")
+  snapshotDate     DateTime? @map("snapshot_date") @db.Date
+  totalValue       Float?    @map("total_value")
+  dailyReturn      Float?    @map("daily_return")
+  cumulativeReturn Float?    @map("cumulative_return")
+  benchmarkValue   Float?    @map("benchmark_value")
+  createdAt        DateTime? @default(now()) @map("created_at")
+  portfolio        Portfolio? @relation(fields: [portfolioId], references: [id])
+
+  @@map("portfolio_snapshots")
+}
+
+model ClientInteraction {
+  id              String    @id @default(uuid())
+  clientId        String?   @map("client_id")
+  advisorId       String?   @map("advisor_id")
+  interactionType String?   @map("interaction_type")
+  subject         String?
+  notes           String?
+  actionItems     String?   @map("action_items")
+  sentiment       String?
+  interactionDate DateTime? @default(now()) @map("interaction_date")
+  nextFollowup    DateTime? @map("next_followup") @db.Date
+  createdAt       DateTime? @default(now()) @map("created_at")
+  client          Client?   @relation(fields: [clientId], references: [id])
+  advisor         User?     @relation(fields: [advisorId], references: [id])
+
+  @@map("client_interactions")
+}
+
+model Watchlist {
+  id          String    @id @default(uuid())
+  advisorId   String?   @map("advisor_id")
+  symbol      String
+  assetType   String?   @map("asset_type")
+  targetPrice Float?    @map("target_price")
+  alertPrice  Float?    @map("alert_price")
+  notes       String?
+  addedAt     DateTime? @default(now()) @map("added_at")
+  advisor     User?     @relation(fields: [advisorId], references: [id])
+
+  @@map("watchlist")
+}
+
+model RiskAssessment {
+  id                   String    @id @default(uuid())
+  clientId             String?   @map("client_id")
+  assessmentDate       DateTime? @map("assessment_date") @db.Date
+  riskToleranceScore   Float?    @map("risk_tolerance_score")
+  timeHorizon          String?   @map("time_horizon")
+  liquidityNeeds       String?   @map("liquidity_needs")
+  incomeStability      String?   @map("income_stability")
+  investmentExperience String?   @map("investment_experience")
+  lossTolerance        String?   @map("loss_tolerance")
+  recommendedProfile   String?   @map("recommended_profile")
+  notes                String?
+  createdAt            DateTime? @default(now()) @map("created_at")
+  client               Client?   @relation(fields: [clientId], references: [id])
+
+  @@map("risk_assessments")
+}
+
+model AdvisorNote {
+  id        String    @id @default(uuid())
+  clientId  String?   @map("client_id")
+  advisorId String?   @map("advisor_id")
+  noteType  String?   @map("note_type")
+  title     String?
+  content   String?
+  isPinned  Boolean?  @default(false) @map("is_pinned")
+  createdAt DateTime? @default(now()) @map("created_at")
+  updatedAt DateTime? @default(now()) @map("updated_at")
+  client    Client?   @relation(fields: [clientId], references: [id])
+  advisor   User?     @relation(fields: [advisorId], references: [id])
+
+  @@map("advisor_notes")
+}
