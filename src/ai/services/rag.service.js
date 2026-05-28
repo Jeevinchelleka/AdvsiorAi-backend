@@ -15,6 +15,7 @@ const axios = require("axios");
 const prisma = require("../../prisma/prisma");
 const { classifyIntent, getTablesForIntent, INTENTS } = require("./intent.service");
 const { retrieveContext, fetchAggregatedStats } = require("./retriever.service");
+const { semanticSearch, formatVectorContext } = require("./vector.service");
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
@@ -257,11 +258,12 @@ async function ragChat(message, history = [], conversationId = null) {
     console.warn("[rag] Relational lookup failed:", err.message);
   }
 
-  // Step 5: Direct Prisma context retrieval (replaces broken vector search)
-  const prismaContext = await retrieveContext(tables, searchQuery).catch(e => {
-    console.warn("[rag] retrieveContext failed:", e.message);
-    return null;
-  });
+  // Step 5: Parallel — Prisma retrieval + pgvector semantic search (Knowledge Layer)
+  const [prismaContext, vectorResults] = await Promise.all([
+    retrieveContext(tables, searchQuery).catch(e => { console.warn("[rag] retrieveContext:", e.message); return null; }),
+    searchQuery ? semanticSearch(message, tables, 6).catch(() => []) : Promise.resolve([]),
+  ]);
+  const vectorContext = formatVectorContext(vectorResults);
 
   // Step 6: Aggregated stats for summary intents
   let statsText = "";
@@ -278,8 +280,8 @@ async function ragChat(message, history = [], conversationId = null) {
     }
   }
 
-  // Step 7: Build final context
-  const contextParts = [statsText, relationalContext, prismaContext].filter(Boolean);
+  // Step 7: Build final context (relational → prisma → vector → stats)
+  const contextParts = [statsText, relationalContext, prismaContext, vectorContext].filter(Boolean);
   const contextText = contextParts.length > 0 ? contextParts.join("\n\n") : null;
 
   // Step 8: Generate with Gemini

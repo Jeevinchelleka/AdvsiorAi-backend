@@ -1,170 +1,191 @@
 /**
- * Lightweight Vector Store using Gemini Embeddings
+ * Vector Search Service — Supabase pgvector
+ * Section 7: Knowledge Layer — semantic similarity search
  *
- * Since we don't have a dedicated vector DB, we:
- * 1. Fetch ALL records from Supabase at query time (small dataset ~10 rows/table)
- * 2. Embed each record + the query using Gemini's embedding API
- * 3. Rank by cosine similarity
- * 4. Return top-K most relevant records
+ * Uses Gemini's text-embedding-004 model to embed queries,
+ * then finds the most semantically similar records in Supabase
+ * using pgvector cosine similarity.
  *
- * This gives true semantic search without needing pgvector or Pinecone.
+ * Setup SQL (run once in Supabase SQL Editor):
+ *
+ *   CREATE EXTENSION IF NOT EXISTS vector;
+ *
+ *   CREATE TABLE IF NOT EXISTS document_embeddings (
+ *     id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+ *     table_name   text NOT NULL,
+ *     record_id    uuid NOT NULL,
+ *     content      text NOT NULL,
+ *     embedding    vector(768),
+ *     created_at   timestamp DEFAULT now()
+ *   );
+ *
+ *   CREATE INDEX IF NOT EXISTS idx_embeddings_table
+ *     ON document_embeddings (table_name);
+ *
+ *   CREATE OR REPLACE FUNCTION match_documents(
+ *     query_embedding vector(768),
+ *     match_table     text,
+ *     match_count     int DEFAULT 10,
+ *     match_threshold float DEFAULT 0.5
+ *   ) RETURNS TABLE (
+ *     id uuid, table_name text, record_id uuid, content text, similarity float
+ *   ) LANGUAGE sql STABLE AS $$
+ *     SELECT id, table_name, record_id, content,
+ *            1 - (embedding <=> query_embedding) AS similarity
+ *     FROM   document_embeddings
+ *     WHERE  table_name = match_table
+ *       AND  1 - (embedding <=> query_embedding) > match_threshold
+ *     ORDER  BY embedding <=> query_embedding
+ *     LIMIT  match_count;
+ *   $$;
  */
 
-const axios = require("axios");
+const axios  = require("axios");
 const prisma = require("../../prisma/prisma");
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-// gemini-embedding-2 is the latest Gemini embedding model
-const EMBED_MODEL = "gemini-embedding-2";
-const EMBED_URL = `https://generativelanguage.googleapis.com/v1beta/models/${EMBED_MODEL}:embedContent`;
+const EMBED_MODEL    = "text-embedding-004";
+const EMBED_URL      = `https://generativelanguage.googleapis.com/v1beta/models/${EMBED_MODEL}:embedContent`;
 
-// ─── Embedding ────────────────────────────────────────────────────────────────
+// ─── Embed a text string with Gemini ─────────────────────────────────────────
 
-async function getEmbedding(text) {
+async function embedText(text) {
   if (!GEMINI_API_KEY) throw new Error("GEMINI_API_KEY not set");
-  const clean = String(text || "").slice(0, 2000); // API limit
+  const clean = String(text || "").slice(0, 2000);
   const res = await axios.post(
     `${EMBED_URL}?key=${GEMINI_API_KEY}`,
     { model: `models/${EMBED_MODEL}`, content: { parts: [{ text: clean }] } },
     { headers: { "Content-Type": "application/json" }, timeout: 15000 }
   );
-  return res.data?.embedding?.values || [];
+  return res.data?.embedding?.values || null;
 }
 
-async function getBatchEmbeddings(texts) {
-  // Gemini doesn't have a true batch embed endpoint on free tier,
-  // so we run them in parallel with a small concurrency limit
-  const BATCH = 5;
-  const results = [];
-  for (let i = 0; i < texts.length; i += BATCH) {
-    const slice = texts.slice(i, i + BATCH);
-    const embeddings = await Promise.all(slice.map(t => getEmbedding(t).catch(() => [])));
-    results.push(...embeddings);
-  }
-  return results;
-}
-
-// ─── Cosine Similarity ────────────────────────────────────────────────────────
-
-function cosineSimilarity(a, b) {
-  if (!a?.length || !b?.length || a.length !== b.length) return 0;
-  let dot = 0, normA = 0, normB = 0;
-  for (let i = 0; i < a.length; i++) {
-    dot   += a[i] * b[i];
-    normA += a[i] * a[i];
-    normB += b[i] * b[i];
-  }
-  const denom = Math.sqrt(normA) * Math.sqrt(normB);
-  return denom === 0 ? 0 : dot / denom;
-}
-
-// ─── Record Serializers ───────────────────────────────────────────────────────
+// ─── Serialize a DB record to a searchable text string ───────────────────────
 
 function serializeRecord(table, row) {
   switch (table) {
     case "clients":
-      return `Client ${row.firstName} ${row.lastName}. Risk profile: ${row.riskProfile}. Annual income: $${row.annualIncome}. Net worth: $${row.netWorth}. Investment goal: ${row.investmentGoal}. Email: ${row.email}.`;
+      return `Client ${row.firstName} ${row.lastName}. Risk: ${row.riskProfile}. Goal: ${row.investmentGoal}. Income: $${row.annualIncome}. Net worth: $${row.netWorth}. City: ${row.city}. Age: ${row.age}.`;
     case "portfolios":
-      return `Portfolio "${row.portfolioName}" for client ${row.client ? row.client.firstName + " " + row.client.lastName : row.clientId}. Total value: $${row.totalValue}. Risk score: ${row.riskScore}/10. Performance score: ${row.performanceScore}%.`;
+      return `Portfolio "${row.portfolioName}". Value: $${row.totalValue}. Risk score: ${row.riskScore}/10. Performance: ${row.performanceScore}%. Type: ${row.portfolioType}. Benchmark: ${row.benchmark}.`;
     case "holdings":
-      const pnl = row.purchasePrice > 0 ? (((row.currentPrice - row.purchasePrice) / row.purchasePrice) * 100).toFixed(1) : "N/A";
-      return `Holding ${row.symbol} (${row.assetType}). Quantity: ${row.quantity}. Purchase price: $${row.purchasePrice}. Current price: $${row.currentPrice}. P&L: ${pnl}%. Allocation: ${row.allocationPercentage}%.`;
-    case "transactions":
-      return `Transaction: ${row.transactionType} ${row.symbol}. Quantity: ${row.quantity} at $${row.price}. Date: ${row.tradeDate ? new Date(row.tradeDate).toISOString().split("T")[0] : "N/A"}. Status: ${row.status}.`;
+      return `Holding ${row.symbol} (${row.assetType}). Quantity: ${row.quantity}. Buy price: $${row.purchasePrice}. Current: $${row.currentPrice}. Allocation: ${row.allocationPercentage}%. Sector: ${row.sector}.`;
     case "compliance_alerts":
-      return `Compliance alert (${row.severity}): ${row.alertMessage}. Client: ${row.client ? row.client.firstName + " " + row.client.lastName : "Unknown"}. Status: ${row.status}.`;
+      return `Compliance alert severity ${row.severity}: ${row.alertMessage}. Status: ${row.status}. Type: ${row.alertType}.`;
     case "recommendations":
-      return `Recommendation (${row.recommendationType}) for ${row.client ? row.client.firstName + " " + row.client.lastName : "Unknown"}: ${row.recommendationText}. Confidence: ${row.confidenceScore ? (row.confidenceScore * 100).toFixed(0) + "%" : "N/A"}. Reasoning: ${row.reasoning}.`;
+      return `Recommendation type ${row.recommendationType}: ${row.recommendationText}. Reasoning: ${row.reasoning}. Confidence: ${row.confidenceScore}.`;
     case "market_data":
-      return `Market data: ${row.symbol}. Price: $${row.currentPrice}. Daily change: ${row.dailyChange}%. Volume: ${row.volume}.`;
+      return `Market ${row.symbol} (${row.assetType}). Price: $${row.currentPrice}. Daily change: ${row.dailyChange}%. Sector: ${row.sector}.`;
     case "research_reports":
-      return `Research report: "${row.title}" (${row.category}). ${(row.content || "").slice(0, 400)}.`;
+      return `Research report "${row.title}" category ${row.category}. ${(row.content || "").slice(0, 300)}.`;
     default:
-      return JSON.stringify(row);
+      return JSON.stringify(row).slice(0, 500);
   }
 }
 
-// ─── Fetch All Records ────────────────────────────────────────────────────────
+// ─── Fetch all records for embedding ─────────────────────────────────────────
 
-async function fetchAllRecords(tables) {
-  const fetchers = {
-    clients:           () => prisma.client.findMany({ take: 20 }),
-    portfolios:        () => prisma.portfolio.findMany({ take: 20, include: { client: { select: { firstName: true, lastName: true } } } }),
-    holdings:          () => prisma.holding.findMany({ take: 30, orderBy: { allocationPercentage: "desc" } }),
-    transactions:      () => prisma.transaction.findMany({ take: 30, orderBy: { tradeDate: "desc" } }),
-    compliance_alerts: () => prisma.complianceAlert.findMany({ take: 20, include: { client: { select: { firstName: true, lastName: true } } } }),
-    recommendations:   () => prisma.recommendation.findMany({ take: 20, include: { client: { select: { firstName: true, lastName: true } } } }),
-    market_data:       () => prisma.marketData.findMany({ take: 20 }),
-    research_reports:  () => prisma.researchReport.findMany({ take: 20 }),
-  };
-
-  const docs = [];
-  await Promise.all(
-    tables.map(async (table) => {
-      try {
-        const rows = await (fetchers[table] || (() => Promise.resolve([])))();
-        for (const row of rows) {
-          docs.push({ table, row, text: serializeRecord(table, row) });
-        }
-      } catch (e) {
-        console.warn(`[vector] Failed to fetch ${table}:`, e.message);
-      }
-    })
-  );
-  return docs;
+async function fetchRecordsForEmbedding(table) {
+  switch (table) {
+    case "clients":      return prisma.client.findMany({ take: 100 });
+    case "portfolios":   return prisma.portfolio.findMany({ take: 100 });
+    case "holdings":     return prisma.holding.findMany({ take: 200, orderBy: { allocationPercentage: "desc" } });
+    case "compliance_alerts": return prisma.complianceAlert.findMany({ take: 100 });
+    case "recommendations":   return prisma.recommendation.findMany({ take: 100 });
+    case "market_data":       return prisma.marketData.findMany({ take: 50 });
+    case "research_reports":  return prisma.researchReport.findMany({ take: 50 });
+    default: return [];
+  }
 }
 
-// ─── Main Semantic Search ─────────────────────────────────────────────────────
+// ─── Get Supabase client ──────────────────────────────────────────────────────
 
-/**
- * Semantically retrieve the top-K most relevant records for a query.
- * Falls back to keyword retrieval if embedding fails.
- */
-async function semanticRetrieve(query, tables, topK = 12) {
-  const docs = await fetchAllRecords(tables);
-  if (docs.length === 0) return [];
+function getSupabase() {
+  try {
+    const { createClient } = require("@supabase/supabase-js");
+    return createClient(
+      process.env.SUPABASE_URL || "https://yigrmierugfllnxtznjd.supabase.co",
+      process.env.SUPABASE_KEY || ""
+    );
+  } catch { return null; }
+}
+
+// ─── Index a table (generate & store embeddings) ─────────────────────────────
+
+async function indexTable(table) {
+  const supabase = getSupabase();
+  if (!supabase) return { indexed: 0, error: "Supabase not configured" };
+
+  const records = await fetchRecordsForEmbedding(table);
+  let indexed = 0;
+
+  for (const row of records) {
+    try {
+      const content   = serializeRecord(table, row);
+      const embedding = await embedText(content);
+      if (!embedding) continue;
+
+      await supabase.from("document_embeddings").upsert({
+        table_name: table,
+        record_id:  row.id,
+        content,
+        embedding,
+      }, { onConflict: "table_name,record_id" });
+
+      indexed++;
+      await new Promise(r => setTimeout(r, 100)); // rate limit
+    } catch (e) {
+      console.warn(`[vector] Failed to embed ${table} ${row.id}:`, e.message);
+    }
+  }
+  return { indexed };
+}
+
+// ─── Semantic search ─────────────────────────────────────────────────────────
+
+async function semanticSearch(query, tables, topK = 8) {
+  const supabase = getSupabase();
+  if (!supabase || !GEMINI_API_KEY) return [];
 
   try {
-    // Embed query + all docs in parallel
-    const [queryEmbed, ...docEmbeds] = await Promise.all([
-      getEmbedding(query),
-      ...docs.map(d => getEmbedding(d.text).catch(() => [])),
-    ]);
+    const queryEmbedding = await embedText(query);
+    if (!queryEmbedding) return [];
 
-    // Score each doc
-    const scored = docs.map((doc, i) => ({
-      ...doc,
-      score: cosineSimilarity(queryEmbed, docEmbeds[i]),
+    const results = [];
+    await Promise.all(tables.map(async (table) => {
+      try {
+        const { data, error } = await supabase.rpc("match_documents", {
+          query_embedding: queryEmbedding,
+          match_table:     table,
+          match_count:     topK,
+          match_threshold: 0.5,
+        });
+        if (error || !data) return;
+        results.push(...data.map(d => ({ ...d, table })));
+      } catch {}
     }));
 
-    // Sort by score descending, take top K
-    scored.sort((a, b) => b.score - a.score);
-    return scored.slice(0, topK);
-
+    return results
+      .sort((a, b) => (b.similarity || 0) - (a.similarity || 0))
+      .slice(0, topK * 2);
   } catch (e) {
-    console.warn("[vector] Embedding failed, falling back to all docs:", e.message);
-    // Fallback: return first topK docs without scoring
-    return docs.slice(0, topK).map(d => ({ ...d, score: 0 }));
+    console.warn("[vector] semanticSearch failed:", e.message);
+    return [];
   }
 }
 
-// ─── Format Retrieved Docs for LLM Context ───────────────────────────────────
+// ─── Format results as context ───────────────────────────────────────────────
 
-function formatDocsAsContext(docs) {
-  if (!docs.length) return "No relevant data found.";
-
-  // Group by table for cleaner context
+function formatVectorContext(results) {
+  if (!results?.length) return null;
   const byTable = {};
-  for (const doc of docs) {
-    if (!byTable[doc.table]) byTable[doc.table] = [];
-    byTable[doc.table].push(doc.text);
+  for (const r of results) {
+    if (!byTable[r.table_name || r.table]) byTable[r.table_name || r.table] = [];
+    byTable[r.table_name || r.table].push(r.content);
   }
-
   return Object.entries(byTable)
-    .map(([table, texts]) =>
-      `=== ${table.toUpperCase().replace(/_/g, " ")} ===\n${texts.join("\n")}`
-    )
+    .map(([t, texts]) => `=== ${t.toUpperCase().replace(/_/g, " ")} (semantic match) ===\n${texts.join("\n")}`)
     .join("\n\n");
 }
 
-module.exports = { semanticRetrieve, formatDocsAsContext, fetchAllRecords, serializeRecord };
+module.exports = { semanticSearch, indexTable, embedText, formatVectorContext, serializeRecord };
