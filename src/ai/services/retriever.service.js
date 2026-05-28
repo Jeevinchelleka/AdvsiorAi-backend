@@ -1,150 +1,131 @@
-/**
- * RAG Retriever Service
- *
- * Fetches relevant records from Supabase based on intent + query.
- * Implements smart retrieval:
- *  - Keyword search on relevant columns
- *  - Fallback to recent records if no keyword match
- *  - Aggregated stats for portfolio/compliance summaries
- */
-
 const prisma = require("../../prisma/prisma");
 
-// How many records to fetch per table
-const RECORD_LIMIT = 8;
+const RECORD_LIMIT = 50; // enough to cover all seeded rows
 
-/**
- * Fetch records from a table using Prisma with optional keyword filter.
- */
 async function fetchRecords(table, query) {
   const q = (query || "").trim().toLowerCase();
+  const hasQuery = q.length > 0;
 
   try {
     switch (table) {
       case "clients": {
-        const where = q
-          ? {
-              OR: [
-                { firstName: { contains: q, mode: "insensitive" } },
-                { lastName:  { contains: q, mode: "insensitive" } },
-                { email:     { contains: q, mode: "insensitive" } },
-                { riskProfile:    { contains: q, mode: "insensitive" } },
-                { investmentGoal: { contains: q, mode: "insensitive" } },
-              ],
-            }
-          : {};
-        return await prisma.client.findMany({
-          where,
-          orderBy: { createdAt: "desc" },
-          take: RECORD_LIMIT,
-        });
+        const where = hasQuery ? {
+          OR: [
+            { firstName:     { contains: q, mode: "insensitive" } },
+            { lastName:      { contains: q, mode: "insensitive" } },
+            { email:         { contains: q, mode: "insensitive" } },
+            { riskProfile:   { contains: q, mode: "insensitive" } },
+            { investmentGoal:{ contains: q, mode: "insensitive" } },
+            { occupation:    { contains: q, mode: "insensitive" } },
+            { city:          { contains: q, mode: "insensitive" } },
+          ],
+        } : {};
+        return await prisma.client.findMany({ where, orderBy: { createdAt: "asc" }, take: RECORD_LIMIT });
+      }
+
+      case "users": {
+        const where = hasQuery ? {
+          OR: [
+            { name:  { contains: q, mode: "insensitive" } },
+            { email: { contains: q, mode: "insensitive" } },
+            { role:  { contains: q, mode: "insensitive" } },
+          ],
+        } : {};
+        return await prisma.user.findMany({ where, orderBy: { createdAt: "asc" }, take: RECORD_LIMIT });
       }
 
       case "portfolios": {
-        const where = q
-          ? { portfolioName: { contains: q, mode: "insensitive" } }
-          : {};
+        const where = hasQuery ? {
+          OR: [
+            { portfolioName: { contains: q, mode: "insensitive" } },
+            { portfolioType: { contains: q, mode: "insensitive" } },
+            { benchmark:     { contains: q, mode: "insensitive" } },
+          ],
+        } : {};
         return await prisma.portfolio.findMany({
-          where,
-          orderBy: { createdAt: "desc" },
-          take: RECORD_LIMIT,
-          include: { client: { select: { firstName: true, lastName: true } } },
+          where, orderBy: { totalValue: "desc" }, take: RECORD_LIMIT,
+          include: { client: { select: { firstName: true, lastName: true, riskProfile: true } } },
         });
       }
 
       case "holdings": {
-        const where = q
-          ? {
-              OR: [
-                { symbol:    { contains: q, mode: "insensitive" } },
-                { assetType: { contains: q, mode: "insensitive" } },
-              ],
-            }
-          : {};
+        const where = hasQuery ? {
+          OR: [
+            { symbol:    { contains: q, mode: "insensitive" } },
+            { assetType: { contains: q, mode: "insensitive" } },
+            { sector:    { contains: q, mode: "insensitive" } },
+          ],
+        } : {};
         return await prisma.holding.findMany({
-          where,
-          orderBy: { allocationPercentage: "desc" },
-          take: RECORD_LIMIT,
+          where, orderBy: { allocationPercentage: "desc" }, take: RECORD_LIMIT,
         });
       }
 
       case "transactions": {
-        const where = q
-          ? {
-              OR: [
-                { symbol:          { contains: q, mode: "insensitive" } },
-                { transactionType: { contains: q, mode: "insensitive" } },
-                { status:          { contains: q, mode: "insensitive" } },
-              ],
-            }
-          : {};
+        const where = hasQuery ? {
+          OR: [
+            { symbol:          { contains: q, mode: "insensitive" } },
+            { transactionType: { contains: q, mode: "insensitive" } },
+            { status:          { contains: q, mode: "insensitive" } },
+          ],
+        } : {};
         return await prisma.transaction.findMany({
-          where,
-          orderBy: { tradeDate: "desc" },
-          take: RECORD_LIMIT,
+          where, orderBy: { tradeDate: "desc" }, take: RECORD_LIMIT,
         });
       }
 
       case "compliance_alerts": {
-        const where = q
-          ? {
-              OR: [
-                { alertMessage: { contains: q, mode: "insensitive" } },
-                { severity:     { contains: q, mode: "insensitive" } },
-                { status:       { contains: q, mode: "insensitive" } },
-              ],
-            }
-          : {};
+        const where = hasQuery ? {
+          OR: [
+            { alertMessage: { contains: q, mode: "insensitive" } },
+            { severity:     { contains: q, mode: "insensitive" } },
+            { status:       { contains: q, mode: "insensitive" } },
+            { alertType:    { contains: q, mode: "insensitive" } },
+          ],
+        } : {};
         return await prisma.complianceAlert.findMany({
-          where,
-          orderBy: { createdAt: "desc" },
-          take: RECORD_LIMIT,
+          where, orderBy: { createdAt: "desc" }, take: RECORD_LIMIT,
           include: { client: { select: { firstName: true, lastName: true, riskProfile: true } } },
         });
       }
 
       case "recommendations": {
-        const where = q
-          ? {
-              OR: [
-                { recommendationType: { contains: q, mode: "insensitive" } },
-                { recommendationText: { contains: q, mode: "insensitive" } },
-              ],
-            }
-          : {};
+        const where = hasQuery ? {
+          OR: [
+            { recommendationType: { contains: q, mode: "insensitive" } },
+            { recommendationText: { contains: q, mode: "insensitive" } },
+            { reasoning:          { contains: q, mode: "insensitive" } },
+          ],
+        } : {};
         return await prisma.recommendation.findMany({
-          where,
-          orderBy: { createdAt: "desc" },
-          take: RECORD_LIMIT,
+          where, orderBy: { confidenceScore: "desc" }, take: RECORD_LIMIT,
           include: { client: { select: { firstName: true, lastName: true } } },
         });
       }
 
       case "market_data": {
-        const where = q
-          ? { symbol: { contains: q, mode: "insensitive" } }
-          : {};
+        const where = hasQuery ? {
+          OR: [
+            { symbol:    { contains: q, mode: "insensitive" } },
+            { sector:    { contains: q, mode: "insensitive" } },
+            { assetType: { contains: q, mode: "insensitive" } },
+          ],
+        } : {};
         return await prisma.marketData.findMany({
-          where,
-          orderBy: { updatedAt: "desc" },
-          take: RECORD_LIMIT,
+          where, orderBy: { marketCap: "desc" }, take: RECORD_LIMIT,
         });
       }
 
       case "research_reports": {
-        const where = q
-          ? {
-              OR: [
-                { title:    { contains: q, mode: "insensitive" } },
-                { category: { contains: q, mode: "insensitive" } },
-                { content:  { contains: q, mode: "insensitive" } },
-              ],
-            }
-          : {};
+        const where = hasQuery ? {
+          OR: [
+            { title:    { contains: q, mode: "insensitive" } },
+            { category: { contains: q, mode: "insensitive" } },
+            { content:  { contains: q, mode: "insensitive" } },
+          ],
+        } : {};
         return await prisma.researchReport.findMany({
-          where,
-          orderBy: { uploadedAt: "desc" },
-          take: RECORD_LIMIT,
+          where, orderBy: { uploadedAt: "desc" }, take: RECORD_LIMIT,
         });
       }
 
@@ -157,133 +138,91 @@ async function fetchRecords(table, query) {
   }
 }
 
-/**
- * Fetch aggregated stats for advisor productivity summaries
- */
-async function fetchAggregatedStats() {
-  try {
-    const [
-      totalClients, totalPortfolios, totalTransactions,
-      portfolios, openAlerts, holdings,
-    ] = await Promise.all([
-      prisma.client.count(),
-      prisma.portfolio.count(),
-      prisma.transaction.count(),
-      prisma.portfolio.findMany({ select: { totalValue: true, riskScore: true, performanceScore: true } }),
-      prisma.complianceAlert.count({ where: { status: { not: "resolved" } } }),
-      prisma.holding.findMany({ select: { symbol: true, allocationPercentage: true, currentPrice: true, purchasePrice: true } }),
-    ]);
-
-    const totalAUM = portfolios.reduce((s, p) => s + (p.totalValue || 0), 0);
-    const avgRisk  = portfolios.length ? portfolios.reduce((s, p) => s + (p.riskScore || 0), 0) / portfolios.length : 0;
-    const avgPerf  = portfolios.length ? portfolios.reduce((s, p) => s + (p.performanceScore || 0), 0) / portfolios.length : 0;
-
-    // Top concentration risks
-    const concentrationRisks = holdings
-      .filter(h => (h.allocationPercentage || 0) > 20)
-      .sort((a, b) => b.allocationPercentage - a.allocationPercentage)
-      .slice(0, 5)
-      .map(h => `${h.symbol} at ${h.allocationPercentage?.toFixed(1)}%`);
-
-    return {
-      totalClients, totalPortfolios, totalTransactions,
-      totalAUM: totalAUM.toFixed(2),
-      avgRiskScore: avgRisk.toFixed(2),
-      avgPerformanceScore: avgPerf.toFixed(2),
-      openComplianceAlerts: openAlerts,
-      concentrationRisks,
-    };
-  } catch (err) {
-    console.warn("[retriever] Failed to fetch aggregated stats:", err.message);
-    return null;
-  }
-}
-
-/**
- * Format a record from a given table into a human-readable string for the LLM context.
- */
 function formatRecord(table, row) {
   if (!row) return "";
-
   switch (table) {
     case "clients":
-      return `CLIENT: ${row.firstName || ""} ${row.lastName || ""} | Email: ${row.email || "N/A"} | Phone: ${row.phone || "N/A"} | Risk Profile: ${row.riskProfile || "N/A"} | Annual Income: $${row.annualIncome ?? "N/A"} | Net Worth: $${row.netWorth ?? "N/A"} | Investment Goal: ${row.investmentGoal || "N/A"}`;
+      return `CLIENT: ${row.firstName} ${row.lastName} | Risk: ${row.riskProfile} | Age: ${row.age ?? "N/A"} | Occupation: ${row.occupation ?? "N/A"} | City: ${row.city ?? "N/A"} | Income: $${row.annualIncome ?? "N/A"} | Net Worth: $${row.netWorth ?? "N/A"} | Goal: ${row.investmentGoal ?? "N/A"} | KYC: ${row.kycStatus ?? "N/A"} | Risk Score: ${row.riskScore ?? "N/A"}/10`;
 
-    case "portfolios":
-      return `PORTFOLIO: "${row.portfolioName || "Unnamed"}" | Client: ${row.client ? `${row.client.firstName} ${row.client.lastName}` : row.clientId} | Total Value: $${row.totalValue ?? "N/A"} | Risk Score: ${row.riskScore ?? "N/A"}/10 | Performance Score: ${row.performanceScore ?? "N/A"}%`;
+    case "users":
+      return `USER: ${row.name} | Email: ${row.email} | Role: ${row.role}`;
 
-    case "holdings":
+    case "portfolios": {
+      const owner = row.client ? `${row.client.firstName} ${row.client.lastName}` : row.clientId;
+      return `PORTFOLIO: "${row.portfolioName}" | Owner: ${owner} | Value: $${row.totalValue} | Risk Score: ${row.riskScore}/10 | Performance: ${row.performanceScore}% | Type: ${row.portfolioType} | Benchmark: ${row.benchmark} | Status: ${row.status}`;
+    }
+
+    case "holdings": {
       const pnl = row.purchasePrice > 0 ? (((row.currentPrice - row.purchasePrice) / row.purchasePrice) * 100).toFixed(1) : "N/A";
-      return `HOLDING: ${row.symbol || "N/A"} (${row.assetType || "N/A"}) | Qty: ${row.quantity ?? "N/A"} | Purchase: $${row.purchasePrice ?? "N/A"} | Current: $${row.currentPrice ?? "N/A"} | P&L: ${pnl}% | Allocation: ${row.allocationPercentage ?? "N/A"}%`;
+      return `HOLDING: ${row.symbol} (${row.assetType}) | Qty: ${row.quantity} | Buy: $${row.purchasePrice} | Current: $${row.currentPrice} | P&L: ${pnl}% | Allocation: ${row.allocationPercentage}% | Sector: ${row.sector ?? "N/A"} | Beta: ${row.beta ?? "N/A"}`;
+    }
 
     case "transactions":
-      return `TRANSACTION: ${row.transactionType || "N/A"} ${row.symbol || "N/A"} | Qty: ${row.quantity ?? "N/A"} @ $${row.price ?? "N/A"} | Date: ${row.tradeDate ? new Date(row.tradeDate).toISOString().split("T")[0] : "N/A"} | Status: ${row.status || "N/A"}`;
+      return `TRANSACTION: ${row.transactionType} ${row.symbol} | Qty: ${row.quantity} @ $${row.price} | Date: ${row.tradeDate ? new Date(row.tradeDate).toISOString().split("T")[0] : "N/A"} | Status: ${row.status} | Fees: $${row.fees ?? 0}`;
 
-    case "compliance_alerts":
-      const clientName = row.client ? `${row.client.firstName} ${row.client.lastName}` : "Unknown";
-      return `COMPLIANCE ALERT [${row.severity || "N/A"}]: ${row.alertMessage || "N/A"} | Client: ${clientName} | Status: ${row.status || "N/A"} | Date: ${row.createdAt ? new Date(row.createdAt).toISOString().split("T")[0] : "N/A"}`;
+    case "compliance_alerts": {
+      const c = row.client ? `${row.client.firstName} ${row.client.lastName}` : "Unknown";
+      return `COMPLIANCE ALERT [${row.severity}]: ${row.alertMessage} | Client: ${c} | Status: ${row.status} | Type: ${row.alertType ?? "N/A"} | Date: ${row.createdAt ? new Date(row.createdAt).toISOString().split("T")[0] : "N/A"}`;
+    }
 
-    case "recommendations":
-      const recClient = row.client ? `${row.client.firstName} ${row.client.lastName}` : "Unknown";
-      return `RECOMMENDATION [${row.recommendationType || "N/A"}] for ${recClient}: ${row.recommendationText || "N/A"} | Confidence: ${row.confidenceScore ? (row.confidenceScore * 100).toFixed(0) + "%" : "N/A"} | Reasoning: ${row.reasoning || "N/A"}`;
+    case "recommendations": {
+      const c = row.client ? `${row.client.firstName} ${row.client.lastName}` : "Unknown";
+      return `RECOMMENDATION [${row.recommendationType}] → ${c}: ${row.recommendationText} | Confidence: ${row.confidenceScore ? (row.confidenceScore * 100).toFixed(0) + "%" : "N/A"} | Reasoning: ${row.reasoning}`;
+    }
 
-    case "market_data":
-      const change = row.dailyChange >= 0 ? `+${row.dailyChange}%` : `${row.dailyChange}%`;
-      return `MARKET: ${row.symbol || "N/A"} | Price: $${row.currentPrice ?? "N/A"} | Daily Change: ${change} | Volume: ${row.volume?.toLocaleString() ?? "N/A"}`;
+    case "market_data": {
+      const chg = row.dailyChange >= 0 ? `+${row.dailyChange}%` : `${row.dailyChange}%`;
+      return `MARKET: ${row.symbol} (${row.assetType}) | Price: $${row.currentPrice} | Change: ${chg} | Volume: ${row.volume?.toLocaleString()} | 52W High: $${row.week52High} | 52W Low: $${row.week52Low} | P/E: ${row.peRatio ?? "N/A"} | Sector: ${row.sector}`;
+    }
 
     case "research_reports":
-      return `RESEARCH REPORT: "${row.title || "Untitled"}" [${row.category || "N/A"}] | ${(row.content || "").slice(0, 300)}`;
+      return `RESEARCH: "${row.title}" [${row.category}] — ${(row.content || "").slice(0, 400)}`;
 
     default:
       return JSON.stringify(row);
   }
 }
 
-/**
- * Main retrieval function — fetches context for given tables and query.
- */
-async function retrieveContext(tables, query, includeStats = false) {
-  const contextParts = [];
+async function fetchAggregatedStats() {
+  try {
+    const [totalClients, totalPortfolios, totalTransactions, portfolios, openAlerts, holdings] =
+      await Promise.all([
+        prisma.client.count(),
+        prisma.portfolio.count(),
+        prisma.transaction.count(),
+        prisma.portfolio.findMany({ select: { totalValue: true, riskScore: true, performanceScore: true } }),
+        prisma.complianceAlert.count({ where: { status: { not: "resolved" } } }),
+        prisma.holding.findMany({ select: { symbol: true, allocationPercentage: true, currentPrice: true, purchasePrice: true } }),
+      ]);
 
-  // Optionally include aggregated stats
-  if (includeStats) {
-    const stats = await fetchAggregatedStats();
-    if (stats) {
-      contextParts.push(
-        `=== ADVISOR BOOK SUMMARY ===\n` +
-        `Total Clients: ${stats.totalClients}\n` +
-        `Total Portfolios: ${stats.totalPortfolios}\n` +
-        `Total Transactions: ${stats.totalTransactions}\n` +
-        `Total AUM: $${stats.totalAUM}\n` +
-        `Average Risk Score: ${stats.avgRiskScore}/10\n` +
-        `Average Performance Score: ${stats.avgPerformanceScore}%\n` +
-        `Open Compliance Alerts: ${stats.openComplianceAlerts}\n` +
-        `Concentration Risks (>20%): ${stats.concentrationRisks.length > 0 ? stats.concentrationRisks.join(", ") : "None"}`
-      );
-    }
+    const totalAUM  = portfolios.reduce((s, p) => s + (p.totalValue || 0), 0);
+    const avgRisk   = portfolios.length ? portfolios.reduce((s, p) => s + (p.riskScore || 0), 0) / portfolios.length : 0;
+    const avgPerf   = portfolios.length ? portfolios.reduce((s, p) => s + (p.performanceScore || 0), 0) / portfolios.length : 0;
+    const concentrationRisks = holdings
+      .filter(h => (h.allocationPercentage || 0) > 20)
+      .sort((a, b) => b.allocationPercentage - a.allocationPercentage)
+      .slice(0, 5)
+      .map(h => `${h.symbol} at ${h.allocationPercentage?.toFixed(1)}%`);
+
+    return { totalClients, totalPortfolios, totalTransactions, totalAUM: totalAUM.toFixed(2), avgRiskScore: avgRisk.toFixed(2), avgPerformanceScore: avgPerf.toFixed(2), openComplianceAlerts: openAlerts, concentrationRisks };
+  } catch (err) {
+    console.warn("[retriever] fetchAggregatedStats failed:", err.message);
+    return null;
   }
+}
 
-  // Fetch records from each relevant table in parallel
+async function retrieveContext(tables, query) {
+  const parts = [];
   const results = await Promise.all(tables.map(t => fetchRecords(t, query)));
 
   for (let i = 0; i < tables.length; i++) {
-    const table = tables[i];
     const records = results[i];
-    if (!records || records.length === 0) continue;
-
-    const formatted = records
-      .map(r => formatRecord(table, r))
-      .filter(Boolean)
-      .join("\n");
-
-    if (formatted) {
-      contextParts.push(`=== ${table.toUpperCase().replace("_", " ")} ===\n${formatted}`);
-    }
+    if (!records?.length) continue;
+    const formatted = records.map(r => formatRecord(tables[i], r)).filter(Boolean).join("\n");
+    if (formatted) parts.push(`=== ${tables[i].toUpperCase().replace(/_/g, " ")} ===\n${formatted}`);
   }
 
-  return contextParts.length > 0
-    ? contextParts.join("\n\n")
-    : "No relevant data found in the database for this query.";
+  return parts.length > 0 ? parts.join("\n\n") : null;
 }
 
 module.exports = { retrieveContext, fetchAggregatedStats };

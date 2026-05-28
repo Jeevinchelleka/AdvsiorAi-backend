@@ -276,3 +276,32 @@ model AdvisorNote {
 
   @@map("advisor_notes")
 }
+
+model AuditLog {
+  id         String    @id @default(uuid())
+  userId     String?   @map("user_id")
+  userRole   String?   @map("user_role")
+  action     String?
+  resource   String?
+  resourceId String?   @map("resource_id")
+  details    String?
+  ipAddress  String?   @map("ip_address")
+  userAgent  String?   @map("user_agent")
+  status     String?   @default("success")
+  createdAt  DateTime? @default(now()) @map("created_at")
+
+  @@map("audit_logs")
+}
+
+model RolePermission {
+  id         String    @id @default(uuid())
+  role       String
+  resource   String
+  action     String
+  allowed    Boolean   @default(true)
+  createdAt  DateTime? @default(now()) @map("created_at")
+
+  @@unique([role, resource, action])
+  @@map("role_permissions")
+}
+
