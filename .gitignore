@@ -2,5 +2,9 @@
 /src/generated/prisma
 node_modules
 
+# Environment variables — never commit these
+.env
+.env.*
+
 # Machine-specific corporate SSL CA cert (Avast Web/Mail Shield)
 avast-ca.pem

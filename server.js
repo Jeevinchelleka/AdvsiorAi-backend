@@ -3,13 +3,42 @@ const cors = require("cors");
 const compression = require("compression");
 require("dotenv").config();
 
+// ─── Hard defaults for values that must always be correct ────────────────────
+// These are overridden by Railway env vars but ensure the app never breaks
+// if a Railway variable is missing or has a placeholder value
+if (!process.env.GEMINI_MODEL || process.env.GEMINI_MODEL.includes("flash") === false) {
+  process.env.GEMINI_MODEL = "gemini-2.5-flash-lite";
+}
+if (!process.env.SUPABASE_URL || process.env.SUPABASE_URL.includes("supabase.com/dashboard")) {
+  process.env.SUPABASE_URL = "https://yigrmierugfllnxtznjd.supabase.co";
+}
+if (!process.env.JWT_SECRET || process.env.JWT_SECRET === "your-jwt-secret") {
+  process.env.JWT_SECRET = "advisorai_super_secret_key";
+}
+
 const { authenticate, requirePermission } = require("./src/middleware/auth.middleware");
 const { maskResponse } = require("./src/middleware/mask.middleware");
 const { auditLog } = require("./src/middleware/audit.middleware");
 
 const app = express();
 app.use(compression());
-app.use(cors());
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, curl, Postman)
+    if (!origin) return callback(null, true);
+    // Allow localhost for development
+    if (origin.includes("localhost") || origin.includes("127.0.0.1")) return callback(null, true);
+    // Allow all Vercel deployments
+    if (origin.includes(".vercel.app")) return callback(null, true);
+    // Allow the specific production frontend domain (update when you have a custom domain)
+    const allowed = (process.env.ALLOWED_ORIGINS || "").split(",").map(s => s.trim()).filter(Boolean);
+    if (allowed.includes(origin)) return callback(null, true);
+    callback(null, true); // Allow all for now — tighten once domain is set
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+}));
 app.use(express.json());
 
 // ─── Public routes (no auth) ──────────────────────────────────────────────────
